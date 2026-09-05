@@ -38,6 +38,38 @@ app.post('/api/telegram', async (req, res) => {
   res.sendStatus(200);
 });
 
+// Test food alert trigger for Telegram
+app.get('/api/test-alert', async (req, res) => {
+  try {
+    const db = require('./db');
+    const { sendTelegramFoodiePrompt } = require('./services/telegramBot');
+    const sessionId = 'sess_' + Date.now();
+    
+    db.insertPending({
+      id: sessionId,
+      name: 'Sibu Night Market - Ding Bian Hu',
+      candidates: [],
+      lat: 2.30206,
+      lon: 111.86868,
+      address: 'Market Road, Sibu',
+      category: 'Food Stall',
+      created_at: Date.now()
+    });
+
+    const success = await sendTelegramFoodiePrompt({
+      placeName: 'Sibu Night Market - Ding Bian Hu',
+      sessionId: sessionId,
+      lat: 2.30206,
+      lon: 111.86868,
+      category: 'Food Stall'
+    });
+
+    res.json({ success, message: 'Test alert sent to Telegram!', sessionId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Health check endpoint (for Render / Uptime monitors to prevent cold starts)
 app.get('/health', (req, res) => {
   res.json({
