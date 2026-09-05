@@ -26,12 +26,22 @@ router.post('/', async (req, res) => {
 
     const result = await processLocation(payload);
 
-    // OwnTracks expects HTTP 200 OK (empty array or JSON response)
-    return res.json(result);
+    // OwnTracks iOS HTTP specification strictly requires a JSON array response (e.g. [])
+    return res.status(200).json([]);
   } catch (err) {
     console.error('[Route/Location] Error processing location update:', err);
     return res.status(500).json({ error: err.message });
   }
+});
+
+/**
+ * Handle GET/HEAD pings from OwnTracks
+ */
+router.get('/', (req, res) => {
+  res.json([]);
+});
+router.head('/', (req, res) => {
+  res.status(200).end();
 });
 
 /**
