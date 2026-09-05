@@ -102,6 +102,26 @@ async function handleTelegramWebhook(body) {
       return;
     }
 
+    if (data.startsWith('manual_rate:')) {
+      const parts = data.split(':');
+      const rating = parseInt(parts[1], 10);
+      const tempId = parts[2];
+
+      const manualSession = activeSessions.get(chatId);
+      if (manualSession) {
+        manualSession.rating = rating;
+        manualSession.step = 'awaiting_comment';
+
+        const stars = '⭐'.repeat(rating);
+        await callTelegram('sendMessage', {
+          chat_id: chatId,
+          text: `You rated *${escapeMarkdown(manualSession.name)}* ${stars}!\n\n💬 *Type your review or food notes below* (or send a food photo!):`,
+          parse_mode: 'Markdown'
+        });
+      }
+      return;
+    }
+
     if (data.startsWith('dismiss:')) {
       const sessionId = data.split(':')[1];
       db.resolvePending(sessionId, 'dismissed');
@@ -121,18 +141,122 @@ async function handleTelegramWebhook(body) {
     db.setSetting('telegram_chat_id', chatId);
     const text = (msg.text || '').trim();
 
-    // Command: /start
+    // Command: /start or Persistent Menu
     if (text === '/start') {
       await callTelegram('sendMessage', {
         chat_id: chatId,
-        text: `👋 *Welcome to your Foodie Tracker Bot!*\n\nI will automatically message you here when you visit a food stall so you can rate it with 1 tap.\n\nAll your ratings automatically sync directly to your *Google Maps* list!`,
-        parse_mode: 'Markdown'
+        text: `👋 *Welcome to your Foodie Tracker Bot!*\n\n• I will automatically message you when you stay at a food stall for 2+ minutes.\n• You can also tap the button below anytime to add an unmapped stall manually!`,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '➕ Add Food Stall Manually' }, { text: '📋 View My List' }]
+          ],
+          resize_keyboard: true
+        }
       });
       return;
     }
 
+    // Button / Command: ➕ Add Food Stall Manually
+    if (text === '➕ Add Food Stall Manually' || text === '/add') {
+      activeSessions.set(chatId, {
+        flow: 'manual_add',
+        step: 'awaiting_location'
+      });
+
+      await callTelegram('sendMessage', {
+        chat_id: chatId,
+        text: `📍 *Let's add an unmapped food stall!*\n\nTap the button below to send your current location, or type the area/street name:`,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '📍 Share Current GPS Location', request_location: true }],
+            [{ text: '❌ Cancel' }]
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true
+        }
+      });
+      return;
+    }
+
+    // Handle Cancel
+    if (text === '❌ Cancel') {
+      activeSessions.delete(chatId);
+      await callTelegram('sendMessage', {
+        chat_id: chatId,
+        text: 'Action cancelled.',
+        reply_markup: {
+          keyboard: [[{ text: '➕ Add Food Stall Manually' }, { text: '📋 View My List' }]],
+          resize_keyboard: true
+        }
+      });
+      return;
+    }
+
+    // Check if in manual add flow
+    const manualSession = activeSessions.get(chatId);
+    if (manualSession && manualSession.flow === 'manual_add') {
+      // Step A: Received Location
+      if (manualSession.step === 'awaiting_location') {
+        let lat = 0, lon = 0, address = '';
+        if (msg.location) {
+          lat = msg.location.latitude;
+          lon = msg.location.longitude;
+          address = `GPS (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+        } else {
+          // User typed text address/street
+          address = text;
+          // Fallback to recent cluster coordinates if available
+          const lastCluster = require('./dwellTracker').getClusterState();
+          lat = lastCluster ? lastCluster.centerLat : 2.30206;
+          lon = lastCluster ? lastCluster.centerLon : 111.86868;
+        }
+
+        manualSession.step = 'awaiting_name';
+        manualSession.lat = lat;
+        manualSession.lon = lon;
+        manualSession.address = address;
+
+        await callTelegram('sendMessage', {
+          chat_id: chatId,
+          text: `🍜 *Got location!* Now, what is the name of this food stall?`,
+          parse_mode: 'Markdown',
+          reply_markup: { remove_keyboard: true }
+        });
+        return;
+      }
+
+      // Step B: Received Store Name
+      if (manualSession.step === 'awaiting_name') {
+        const storeName = text;
+        manualSession.name = storeName;
+        manualSession.step = 'awaiting_rating';
+        const tempId = 'manual_' + Date.now();
+        manualSession.sessionId = tempId;
+
+        const inlineKeyboard = [
+          [
+            { text: '⭐ 1', callback_data: `manual_rate:1:${tempId}` },
+            { text: '⭐ 2', callback_data: `manual_rate:2:${tempId}` },
+            { text: '⭐ 3', callback_data: `manual_rate:3:${tempId}` },
+            { text: '⭐ 4', callback_data: `manual_rate:4:${tempId}` },
+            { text: '⭐ 5', callback_data: `manual_rate:5:${tempId}` }
+          ]
+        ];
+
+        await callTelegram('sendMessage', {
+          chat_id: chatId,
+          text: `Rate *${escapeMarkdown(storeName)}*:`,
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: inlineKeyboard }
+        });
+        return;
+      }
+    }
+
     // Command: /list (View recent reviews)
-    if (text === '/list') {
+    if (text === '/list' || text === '📋 View My List') {
       const reviews = db.getReviews().slice(0, 5);
       if (reviews.length === 0) {
         await callTelegram('sendMessage', {
@@ -172,19 +296,19 @@ async function handleTelegramWebhook(body) {
 
       const review = {
         id: reviewId,
-        name: pending ? pending.name : 'Local Food Spot',
-        lat: pending ? pending.lat : 0,
-        lon: pending ? pending.lon : 0,
-        address: pending ? pending.address : '',
+        name: active.name || (pending ? pending.name : 'Local Food Spot'),
+        lat: active.lat !== undefined ? active.lat : (pending ? pending.lat : 0),
+        lon: active.lon !== undefined ? active.lon : (pending ? pending.lon : 0),
+        address: active.address || (pending ? pending.address : ''),
         rating: active.rating,
         comment: comment || 'Rated via Telegram',
         photo_url: photoUrl,
-        category: pending ? pending.category : 'Restaurant',
+        category: pending ? pending.category : 'Food Stall',
         created_at: Date.now()
       };
 
       db.insertReview(review);
-      if (active.sessionId) {
+      if (active.sessionId && !active.sessionId.startsWith('manual_')) {
         db.resolvePending(active.sessionId, 'completed');
       }
 
@@ -195,7 +319,13 @@ async function handleTelegramWebhook(body) {
       await callTelegram('sendMessage', {
         chat_id: chatId,
         text: `✅ *Saved to your Google Maps Foodie List!*\n\n📍 *${escapeMarkdown(review.name)}*\nRating: ${'⭐'.repeat(review.rating)}\nComment: "${escapeMarkdown(review.comment)}"\n\n🗺️ [View on Google Maps](${gmapsUrl})`,
-        parse_mode: 'Markdown'
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '➕ Add Food Stall Manually' }, { text: '📋 View My List' }]
+          ],
+          resize_keyboard: true
+        }
       });
       return;
     }
