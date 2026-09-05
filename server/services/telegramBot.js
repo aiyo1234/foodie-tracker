@@ -31,8 +31,12 @@ async function callTelegram(method, payload) {
  * Sends the interactive 1-tap rating message directly inside Telegram
  */
 async function sendTelegramFoodiePrompt({ placeName, sessionId, lat, lon, category }) {
+  if (!storedChatId) {
+    storedChatId = db.getSetting('telegram_chat_id');
+  }
+
   if (!config.TELEGRAM_BOT_TOKEN || !storedChatId) {
-    console.warn('[Telegram] Cannot send alert: BOT_TOKEN or CHAT_ID not configured yet.');
+    console.warn('[Telegram] Cannot send alert: BOT_TOKEN or CHAT_ID not configured yet. (Send /start to @daweidaiii_bot)');
     return false;
   }
 
@@ -114,6 +118,7 @@ async function handleTelegramWebhook(body) {
     const msg = body.message;
     const chatId = msg.chat.id;
     storedChatId = chatId;
+    db.setSetting('telegram_chat_id', chatId);
     const text = (msg.text || '').trim();
 
     // Command: /start

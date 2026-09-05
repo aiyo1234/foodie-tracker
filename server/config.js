@@ -6,7 +6,7 @@ module.exports = {
   BASE_URL: process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`,
   
   // Telegram Bot Token (from @BotFather)
-  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '8879257487:AAG9x0emOL8ivVVQclVT1tMhkBAUqEvRw30',
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '',
 
   // ntfy.sh fallback topic

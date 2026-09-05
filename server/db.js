@@ -49,6 +49,11 @@ db.exec(`
     prompted_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
+
   CREATE INDEX IF NOT EXISTS idx_reviews_rating ON reviews(rating);
   CREATE INDEX IF NOT EXISTS idx_prompted_time ON prompted_places(prompted_at);
 `);
@@ -113,6 +118,13 @@ module.exports = {
   },
   getRecentPrompts: (sinceMs) => {
     return db.prepare('SELECT * FROM prompted_places WHERE prompted_at >= ?').all(sinceMs);
+  },
+  getSetting: (key) => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    return row ? row.value : null;
+  },
+  setSetting: (key, value) => {
+    return db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, String(value));
   },
   close: () => {
     try {
