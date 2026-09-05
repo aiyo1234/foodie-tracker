@@ -42,9 +42,9 @@ const upload = multer({
  * GET /api/reviews
  * Fetch all completed reviews
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const reviews = db.getReviews();
+    const reviews = await db.getReviews();
     res.json(reviews);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -54,9 +54,9 @@ router.get('/', (req, res) => {
 /**
  * GET /api/reviews/:id
  */
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const review = db.getReviewById(req.params.id);
+    const review = await db.getReviewById(req.params.id);
     if (!review) return res.status(404).json({ error: 'Review not found' });
     res.json(review);
   } catch (err) {
@@ -68,7 +68,7 @@ router.get('/:id', (req, res) => {
  * POST /api/reviews
  * Save a review (multipart with photo or application/json)
  */
-router.post('/', upload.single('photo'), (req, res) => {
+router.post('/', upload.single('photo'), async (req, res) => {
   try {
     const { name, rating, comment, lat, lon, address, category, sessionId } = req.body;
 
@@ -92,11 +92,11 @@ router.post('/', upload.single('photo'), (req, res) => {
       created_at: Date.now()
     };
 
-    db.insertReview(review);
+    await db.insertReview(review);
 
     // If submitted via a pending session, mark that session as resolved
     if (sessionId) {
-      db.resolvePending(sessionId, 'completed');
+      await db.resolvePending(sessionId, 'completed');
     }
 
     console.log(`[Reviews] New review saved: "${review.name}" (${review.rating} ⭐)`);
@@ -111,9 +111,10 @@ router.post('/', upload.single('photo'), (req, res) => {
  * GET /api/reviews/pending/all
  * List all unreviewed pending prompts
  */
-router.get('/pending/all', (req, res) => {
+router.get('/pending/all', async (req, res) => {
   try {
-    const pendings = db.getPendingReviews().map(p => {
+    const raw = await db.getPendingReviews();
+    const pendings = raw.map(p => {
       let candidates = [];
       try {
         candidates = JSON.parse(p.candidates_json || '[]');
@@ -130,9 +131,9 @@ router.get('/pending/all', (req, res) => {
  * GET /api/reviews/pending/:id
  * Get details of a single pending review session
  */
-router.get('/pending/:id', (req, res) => {
+router.get('/pending/:id', async (req, res) => {
   try {
-    const pending = db.getPendingById(req.params.id);
+    const pending = await db.getPendingById(req.params.id);
     if (!pending) {
       return res.status(404).json({ error: 'Pending review session not found' });
     }
@@ -151,9 +152,9 @@ router.get('/pending/:id', (req, res) => {
  * POST /api/reviews/pending/:id/dismiss
  * Dismiss / skip a pending prompt
  */
-router.post('/pending/:id/dismiss', (req, res) => {
+router.post('/pending/:id/dismiss', async (req, res) => {
   try {
-    db.resolvePending(req.params.id, 'dismissed');
+    await db.resolvePending(req.params.id, 'dismissed');
     res.json({ message: 'Pending prompt dismissed' });
   } catch (err) {
     res.status(500).json({ error: err.message });

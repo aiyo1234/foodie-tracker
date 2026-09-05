@@ -1,134 +1,147 @@
-const fs = require('fs');
+const { createClient } = require('@libsql/client');
 const path = require('path');
-const { DatabaseSync } = require('node:sqlite');
+const fs = require('fs');
 const config = require('./config');
 
-// Ensure data directory exists
+// Ensure data directory exists for local fallback
 const dbDir = path.dirname(config.DB_PATH);
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const db = new DatabaseSync(config.DB_PATH);
+// If TURSO_DATABASE_URL is set, connect to Cloud Turso SQLite (never deletes data!)
+// Otherwise fallback to local file SQLite
+const dbUrl = process.env.TURSO_DATABASE_URL || `file:${config.DB_PATH.replace(/\\/g, '/')}`;
+const authToken = process.env.TURSO_AUTH_TOKEN || undefined;
 
-// Enable WAL mode for better concurrency and performance
-db.exec('PRAGMA journal_mode = WAL;');
+const client = createClient({
+  url: dbUrl,
+  authToken: authToken
+});
 
-// Initialize Tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS reviews (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    lat REAL NOT NULL,
-    lon REAL NOT NULL,
-    address TEXT,
-    rating INTEGER NOT NULL,
-    comment TEXT,
-    photo_url TEXT,
-    category TEXT,
-    created_at INTEGER NOT NULL
-  );
+console.log(`[DB] Connected to: ${process.env.TURSO_DATABASE_URL ? '☁️ Cloud Turso SQLite (Persistent)' : '📁 Local SQLite'}`);
 
-  CREATE TABLE IF NOT EXISTS pending_reviews (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    candidates_json TEXT,
-    lat REAL NOT NULL,
-    lon REAL NOT NULL,
-    address TEXT,
-    category TEXT,
-    status TEXT DEFAULT 'pending',
-    created_at INTEGER NOT NULL
-  );
+/**
+ * Initialize Tables
+ */
+async function initDb() {
+  await client.batch([
+    `CREATE TABLE IF NOT EXISTS reviews (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      lat REAL NOT NULL,
+      lon REAL NOT NULL,
+      address TEXT,
+      rating INTEGER NOT NULL,
+      comment TEXT,
+      photo_url TEXT,
+      category TEXT,
+      created_at INTEGER NOT NULL
+    );`,
+    `CREATE TABLE IF NOT EXISTS pending_reviews (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      candidates_json TEXT,
+      lat REAL NOT NULL,
+      lon REAL NOT NULL,
+      address TEXT,
+      category TEXT,
+      status TEXT DEFAULT 'pending',
+      created_at INTEGER NOT NULL
+    );`,
+    `CREATE TABLE IF NOT EXISTS prompted_places (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lat REAL NOT NULL,
+      lon REAL NOT NULL,
+      name TEXT,
+      prompted_at INTEGER NOT NULL
+    );`,
+    `CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );`,
+    `CREATE INDEX IF NOT EXISTS idx_reviews_rating ON reviews(rating);`,
+    `CREATE INDEX IF NOT EXISTS idx_prompted_time ON prompted_places(prompted_at);`
+  ]);
+}
 
-  CREATE TABLE IF NOT EXISTS prompted_places (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    lat REAL NOT NULL,
-    lon REAL NOT NULL,
-    name TEXT,
-    prompted_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_reviews_rating ON reviews(rating);
-  CREATE INDEX IF NOT EXISTS idx_prompted_time ON prompted_places(prompted_at);
-`);
-
-console.log(`[DB] Database initialized at: ${config.DB_PATH}`);
+// Auto-run migrations on load
+initDb().catch(err => console.error('[DB] Migration error:', err));
 
 module.exports = {
-  db,
-  // Helper queries
-  getReviews: () => {
-    return db.prepare('SELECT * FROM reviews ORDER BY created_at DESC').all();
+  client,
+  initDb,
+  getReviews: async () => {
+    const rs = await client.execute('SELECT * FROM reviews ORDER BY created_at DESC');
+    return rs.rows;
   },
-  getReviewById: (id) => {
-    return db.prepare('SELECT * FROM reviews WHERE id = ?').get(id);
+  getReviewById: async (id) => {
+    const rs = await client.execute({ sql: 'SELECT * FROM reviews WHERE id = ?', args: [id] });
+    return rs.rows[0] || null;
   },
-  insertReview: (review) => {
-    const stmt = db.prepare(`
-      INSERT INTO reviews (id, name, lat, lon, address, rating, comment, photo_url, category, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    return stmt.run(
-      review.id,
-      review.name,
-      review.lat,
-      review.lon,
-      review.address || '',
-      review.rating,
-      review.comment || '',
-      review.photo_url || null,
-      review.category || 'Restaurant',
-      review.created_at || Date.now()
-    );
+  insertReview: async (review) => {
+    return await client.execute({
+      sql: `INSERT INTO reviews (id, name, lat, lon, address, rating, comment, photo_url, category, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        review.id,
+        review.name,
+        review.lat,
+        review.lon,
+        review.address || '',
+        review.rating,
+        review.comment || '',
+        review.photo_url || null,
+        review.category || 'Restaurant',
+        review.created_at || Date.now()
+      ]
+    });
   },
-  getPendingReviews: () => {
-    return db.prepare("SELECT * FROM pending_reviews WHERE status = 'pending' ORDER BY created_at DESC").all();
+  getPendingReviews: async () => {
+    const rs = await client.execute("SELECT * FROM pending_reviews WHERE status = 'pending' ORDER BY created_at DESC");
+    return rs.rows;
   },
-  getPendingById: (id) => {
-    return db.prepare('SELECT * FROM pending_reviews WHERE id = ?').get(id);
+  getPendingById: async (id) => {
+    const rs = await client.execute({ sql: 'SELECT * FROM pending_reviews WHERE id = ?', args: [id] });
+    return rs.rows[0] || null;
   },
-  insertPending: (pending) => {
-    const stmt = db.prepare(`
-      INSERT INTO pending_reviews (id, name, candidates_json, lat, lon, address, category, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-    `);
-    return stmt.run(
-      pending.id,
-      pending.name,
-      JSON.stringify(pending.candidates || []),
-      pending.lat,
-      pending.lon,
-      pending.address || '',
-      pending.category || 'Restaurant',
-      pending.created_at || Date.now()
-    );
+  insertPending: async (pending) => {
+    return await client.execute({
+      sql: `INSERT INTO pending_reviews (id, name, candidates_json, lat, lon, address, category, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      args: [
+        pending.id,
+        pending.name,
+        JSON.stringify(pending.candidates || []),
+        pending.lat,
+        pending.lon,
+        pending.address || '',
+        pending.category || 'Restaurant',
+        pending.created_at || Date.now()
+      ]
+    });
   },
-  resolvePending: (id, status = 'completed') => {
-    return db.prepare('UPDATE pending_reviews SET status = ? WHERE id = ?').run(status, id);
+  resolvePending: async (id, status = 'completed') => {
+    return await client.execute({ sql: 'UPDATE pending_reviews SET status = ? WHERE id = ?', args: [status, id] });
   },
-  recordPrompt: (lat, lon, name) => {
-    const stmt = db.prepare('INSERT INTO prompted_places (lat, lon, name, prompted_at) VALUES (?, ?, ?, ?)');
-    return stmt.run(lat, lon, name || 'Eatery', Date.now());
+  recordPrompt: async (lat, lon, name) => {
+    return await client.execute({
+      sql: 'INSERT INTO prompted_places (lat, lon, name, prompted_at) VALUES (?, ?, ?, ?)',
+      args: [lat, lon, name || 'Eatery', Date.now()]
+    });
   },
-  getRecentPrompts: (sinceMs) => {
-    return db.prepare('SELECT * FROM prompted_places WHERE prompted_at >= ?').all(sinceMs);
+  getRecentPrompts: async (sinceMs) => {
+    const rs = await client.execute({ sql: 'SELECT * FROM prompted_places WHERE prompted_at >= ?', args: [sinceMs] });
+    return rs.rows;
   },
-  getSetting: (key) => {
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
-    return row ? row.value : null;
+  getSetting: async (key) => {
+    const rs = await client.execute({ sql: 'SELECT value FROM settings WHERE key = ?', args: [key] });
+    return rs.rows[0] ? rs.rows[0].value : null;
   },
-  setSetting: (key, value) => {
-    return db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, String(value));
-  },
-  close: () => {
-    try {
-      db.close();
-    } catch (e) {}
+  setSetting: async (key, value) => {
+    return await client.execute({
+      sql: 'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
+      args: [key, String(value)]
+    });
   }
 };

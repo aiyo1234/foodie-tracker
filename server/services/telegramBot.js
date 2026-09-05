@@ -32,7 +32,7 @@ async function callTelegram(method, payload) {
  */
 async function sendTelegramFoodiePrompt({ placeName, sessionId, lat, lon, category }) {
   if (!storedChatId) {
-    storedChatId = db.getSetting('telegram_chat_id');
+    storedChatId = await db.getSetting('telegram_chat_id');
   }
 
   if (!config.TELEGRAM_BOT_TOKEN || !storedChatId) {
@@ -83,7 +83,7 @@ async function handleTelegramWebhook(body) {
       const rating = parseInt(parts[1], 10);
       const sessionId = parts[2];
 
-      const pending = db.getPendingById(sessionId);
+      const pending = await db.getPendingById(sessionId);
       const storeName = pending ? pending.name : 'this food stall';
 
       activeSessions.set(chatId, {
@@ -124,7 +124,7 @@ async function handleTelegramWebhook(body) {
 
     if (data.startsWith('dismiss:')) {
       const sessionId = data.split(':')[1];
-      db.resolvePending(sessionId, 'dismissed');
+      await db.resolvePending(sessionId, 'dismissed');
       await callTelegram('sendMessage', {
         chat_id: chatId,
         text: '👍 Ignored. Enjoy your day!'
@@ -138,7 +138,7 @@ async function handleTelegramWebhook(body) {
     const msg = body.message;
     const chatId = msg.chat.id;
     storedChatId = chatId;
-    db.setSetting('telegram_chat_id', chatId);
+    await db.setSetting('telegram_chat_id', chatId);
     const text = (msg.text || '').trim();
 
     // Command: /start or Persistent Menu
@@ -257,7 +257,8 @@ async function handleTelegramWebhook(body) {
 
     // Command: /list (View recent reviews)
     if (text === '/list' || text === '📋 View My List') {
-      const reviews = db.getReviews().slice(0, 5);
+      const rawReviews = await db.getReviews();
+      const reviews = rawReviews.slice(0, 5);
       if (reviews.length === 0) {
         await callTelegram('sendMessage', {
           chat_id: chatId,
@@ -307,9 +308,9 @@ async function handleTelegramWebhook(body) {
         created_at: Date.now()
       };
 
-      db.insertReview(review);
+      await db.insertReview(review);
       if (active.sessionId && !active.sessionId.startsWith('manual_')) {
-        db.resolvePending(active.sessionId, 'completed');
+        await db.resolvePending(active.sessionId, 'completed');
       }
 
       activeSessions.delete(chatId);

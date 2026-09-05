@@ -73,7 +73,7 @@ async function processLocation(loc) {
 
       // Check 12-hour cooldown for this spot
       const cooldownMs = Date.now() - (config.PROMPT_COOLDOWN_HOURS * 3600 * 1000);
-      const recentPrompts = db.getRecentPrompts(cooldownMs);
+      const recentPrompts = await db.getRecentPrompts(cooldownMs);
       const wasRecentlyPrompted = recentPrompts.some(p => {
         return getDistanceMeters(lat, lon, p.lat, p.lon) <= 100;
       });
@@ -89,7 +89,7 @@ async function processLocation(loc) {
 
       // Create a pending review session
       const sessionId = 'sess_' + crypto.randomBytes(6).toString('hex');
-      db.insertPending({
+      await db.insertPending({
         id: sessionId,
         name: place.name,
         candidates: place.candidates,
@@ -101,7 +101,7 @@ async function processLocation(loc) {
       });
 
       // Record prompt in cooldown table
-      db.recordPrompt(lat, lon, place.name);
+      await db.recordPrompt(lat, lon, place.name);
 
       // Send via Telegram Bot (instant 1-tap rating buttons)
       await sendTelegramFoodiePrompt({

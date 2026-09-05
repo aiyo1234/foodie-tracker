@@ -6,9 +6,9 @@ const db = require('../db');
  * GET /api/map.kml
  * Direct KML layer export for Google Maps / Google Earth
  */
-router.get('/map.kml', (req, res) => {
+router.get('/map.kml', async (req, res) => {
   try {
-    const reviews = db.getReviews();
+    const reviews = await db.getReviews();
 
     let placemarks = '';
     reviews.forEach(r => {
@@ -49,9 +49,9 @@ router.get('/map.kml', (req, res) => {
  * GET /api/map.csv
  * 1-Click CSV Import for Google My Maps
  */
-router.get('/map.csv', (req, res) => {
+router.get('/map.csv', async (req, res) => {
   try {
-    const reviews = db.getReviews();
+    const reviews = await db.getReviews();
 
     let csv = 'Name,Rating,Comment,Address,Latitude,Longitude,Date\n';
     reviews.forEach(r => {
@@ -72,9 +72,9 @@ router.get('/map.csv', (req, res) => {
  * GET /api/map.geojson
  * GeoJSON export
  */
-router.get('/map.geojson', (req, res) => {
+router.get('/map.geojson', async (req, res) => {
   try {
-    const reviews = db.getReviews();
+    const reviews = await db.getReviews();
     const geojson = {
       type: 'FeatureCollection',
       features: reviews.map(r => ({
