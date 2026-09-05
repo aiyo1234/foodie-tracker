@@ -5,6 +5,8 @@ const config = require('./config');
 
 const locationRoutes = require('./routes/location');
 const reviewRoutes = require('./routes/reviews');
+const mapFeedRoutes = require('./routes/mapFeed');
+const { handleTelegramWebhook } = require('./services/telegramBot');
 
 const app = express();
 
@@ -24,6 +26,17 @@ app.use(express.static(path.join(__dirname, '../public')));
 // API Routes
 app.use('/api/location', locationRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api', mapFeedRoutes);
+
+// Telegram Webhook
+app.post('/api/telegram', async (req, res) => {
+  try {
+    await handleTelegramWebhook(req.body);
+  } catch (err) {
+    console.error('[Telegram Webhook Error]:', err);
+  }
+  res.sendStatus(200);
+});
 
 // Health check endpoint (for Render / Uptime monitors to prevent cold starts)
 app.get('/health', (req, res) => {

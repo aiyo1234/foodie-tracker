@@ -5,19 +5,22 @@ module.exports = {
   PORT: process.env.PORT || 3000,
   BASE_URL: process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`,
   
-  // ntfy.sh push notification topic
-  // If not set, a random unique topic will be generated or use default
+  // Telegram Bot Token (from @BotFather)
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
+  TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '',
+
+  // ntfy.sh fallback topic
   NTFY_TOPIC: process.env.NTFY_TOPIC || 'foodie-tracker-alert',
   NTFY_SERVER: process.env.NTFY_SERVER || 'https://ntfy.sh',
 
-  // Dwell threshold in seconds (default 5 minutes = 300 seconds)
-  DWELL_THRESHOLD_SECONDS: parseInt(process.env.DWELL_THRESHOLD_SECONDS, 10) || 300,
+  // Dwell threshold in seconds: lowered to 150 seconds (2.5 minutes) for faster detection
+  DWELL_THRESHOLD_SECONDS: parseInt(process.env.DWELL_THRESHOLD_SECONDS, 10) || 150,
 
-  // Maximum stationary drift radius in meters to consider user still at the same spot
-  STATIONARY_RADIUS_METERS: parseInt(process.env.STATIONARY_RADIUS_METERS, 10) || 65,
+  // Maximum stationary drift radius in meters
+  STATIONARY_RADIUS_METERS: parseInt(process.env.STATIONARY_RADIUS_METERS, 10) || 75,
 
-  // Cooldown in hours before prompting for the same place/coordinates again
-  PROMPT_COOLDOWN_HOURS: parseInt(process.env.PROMPT_COOLDOWN_HOURS, 10) || 12,
+  // Cooldown in hours before prompting for the same place again
+  PROMPT_COOLDOWN_HOURS: parseInt(process.env.PROMPT_COOLDOWN_HOURS, 10) || 8,
 
   // Home Geofence (Exclusion)
   HOME_LAT: process.env.HOME_LAT ? parseFloat(process.env.HOME_LAT) : null,

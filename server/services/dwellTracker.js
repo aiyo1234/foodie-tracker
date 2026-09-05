@@ -4,6 +4,7 @@ const db = require('../db');
 const { getDistanceMeters, checkExclusion } = require('./geoUtils');
 const { findNearbyFoodPlace } = require('./osmService');
 const { sendFoodieNotification } = require('./notifier');
+const { sendTelegramFoodiePrompt } = require('./telegramBot');
 
 // In-memory cluster tracking
 let currentCluster = null;
@@ -102,7 +103,16 @@ async function processLocation(loc) {
       // Record prompt in cooldown table
       db.recordPrompt(lat, lon, place.name);
 
-      // Send ntfy push notification to iPhone
+      // Send via Telegram Bot (instant 1-tap rating buttons)
+      await sendTelegramFoodiePrompt({
+        placeName: place.name,
+        sessionId: sessionId,
+        lat: lat,
+        lon: lon,
+        category: place.category
+      });
+
+      // Also send ntfy push notification as backup
       await sendFoodieNotification({
         placeName: place.name,
         sessionId: sessionId,
