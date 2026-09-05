@@ -11,15 +11,15 @@ if (!fs.existsSync(dbDir)) {
 
 // If TURSO_DATABASE_URL is set, connect to Cloud Turso SQLite (never deletes data!)
 // Otherwise fallback to local file SQLite
-const dbUrl = process.env.TURSO_DATABASE_URL || `file:${config.DB_PATH.replace(/\\/g, '/')}`;
-const authToken = process.env.TURSO_AUTH_TOKEN || undefined;
+const dbUrl = process.env.TURSO_DATABASE_URL || config.TURSO_DATABASE_URL || `file:${config.DB_PATH.replace(/\\/g, '/')}`;
+const authToken = process.env.TURSO_AUTH_TOKEN || config.TURSO_AUTH_TOKEN || undefined;
 
 const client = createClient({
   url: dbUrl,
   authToken: authToken
 });
 
-console.log(`[DB] Connected to: ${process.env.TURSO_DATABASE_URL ? '☁️ Cloud Turso SQLite (Persistent)' : '📁 Local SQLite'}`);
+console.log(`[DB] Connected to: ${dbUrl.startsWith('libsql') ? '☁️ Cloud Turso SQLite (Persistent & Permanent)' : '📁 Local SQLite'}`);
 
 /**
  * Initialize Tables
