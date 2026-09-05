@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Foodie Tracker - My Map & Reviews</title>
+  
+  <!-- iOS PWA meta tags -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Foodie Map">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3448/3448609.png">
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <!-- App Style -->
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-icon">🍜</span>
+      <h1 class="brand-title">Foodie Map</h1>
+    </div>
+    <div class="header-actions">
+      <button id="pendingBtn" class="btn-pending" style="display: none;" onclick="openPendingModal()">
+        <span>Pending Reviews</span>
+        <span id="pendingCount" class="badge">0</span>
+      </button>
+      <a href="/review.html" class="btn-pending" style="text-decoration: none;">
+        <span>+ Log Food</span>
+      </a>
+    </div>
+  </header>
+
+  <!-- Main Map View -->
+  <main class="main-container">
+    <!-- Map Canvas -->
+    <div id="map"></div>
+
+    <!-- Floating Search & Filter Chips -->
+    <div class="map-overlay-controls">
+      <div class="search-box">
+        <span style="color: #94a3b8; margin-right: 6px;">🔍</span>
+        <input type="text" id="searchInput" placeholder="Search saved food stalls or comments..." oninput="filterReviews()">
+      </div>
+      <div class="filter-chips">
+        <button class="chip active" data-filter="all" onclick="setRatingFilter('all', this)">All Places</button>
+        <button class="chip" data-filter="5" onclick="setRatingFilter(5, this)">⭐⭐⭐⭐⭐ (5)</button>
+        <button class="chip" data-filter="4" onclick="setRatingFilter(4, this)">⭐⭐⭐⭐ (4+)</button>
+        <button class="chip" data-filter="photo" onclick="setRatingFilter('photo', this)">📷 Has Photo</button>
+      </div>
+    </div>
+
+    <!-- Bottom Sheet / Sliding Reviews Drawer -->
+    <div id="reviewsPanel" class="sidebar-panel">
+      <div class="drag-handle" onclick="toggleReviewsPanel()"></div>
+      <div class="panel-header">
+        <h2 class="panel-title" id="panelTitle">My Foodie Spots (0)</h2>
+        <span style="font-size: 13px; color: var(--text-muted); cursor: pointer;" onclick="toggleReviewsPanel()">Tap to expand ↗</span>
+      </div>
+      <div class="reviews-list" id="reviewsList">
+        <div style="text-align: center; color: #94a3b8; padding: 20px;">Loading your foodie spots...</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Pending Reviews Modal -->
+  <div id="pendingModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2000; align-items: center; justify-content: center; padding: 16px;">
+    <div style="background: white; border-radius: 16px; width: 100%; max-width: 440px; max-height: 80vh; overflow-y: auto; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="font-size: 18px; font-weight: 700;">🕒 Pending Food Visits</h3>
+        <button onclick="closePendingModal()" style="background: none; border: none; font-size: 20px; cursor: pointer;">✕</button>
+      </div>
+      <p style="font-size: 13px; color: #64748b; margin-bottom: 16px;">
+        These places were automatically detected when you stopped for 5+ minutes. Tap to rate and review!
+      </p>
+      <div id="pendingList" style="display: flex; flex-direction: column; gap: 10px;">
+        <!-- Injected via JavaScript -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Main Map Logic -->
+  <script src="/js/map.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "foodie-tracker",
+  "version": "1.0.0",
+  "description": "Automated foodie list tracker with iOS background tracking, ntfy push notifications, and Google Maps integration",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "simulate": "node tests/simulate-visit.js"
+  },
+  "keywords": ["foodie", "owntracks", "ntfy", "google-maps", "geolocation"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1"
+  }
+}
