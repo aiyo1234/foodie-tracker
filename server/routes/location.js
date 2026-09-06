@@ -9,28 +9,29 @@ const { processLocation, getClusterState, resetCluster } = require('../services/
 router.post('/', async (req, res) => {
   try {
     let payload = req.body;
-
-    // OwnTracks can send a single object or an array of objects
-    if (Array.isArray(payload)) {
-      payload = payload[0];
+    if (!payload) {
+      return res.status(200).json([]);
     }
 
-    if (!payload || !payload.lat || !payload.lon) {
-      return res.status(400).json({ error: 'Missing lat or lon in payload' });
-    }
+    // Process batched array payloads in chronological order
+    const items = Array.isArray(payload) ? payload : [payload];
+    items.sort((a, b) => (a.tst || 0) - (b.tst || 0));
 
-    // OwnTracks sends _type: 'location', 'transition', 'lwt', etc.
-    if (payload._type && payload._type !== 'location' && payload._type !== 'transition') {
-      return res.json({ status: 'ignored_type', type: payload._type });
+    for (const item of items) {
+      if (item._type && item._type !== 'location' && item._type !== 'transition') {
+        continue;
+      }
+      if (item.lat == null || item.lon == null) {
+        continue;
+      }
+      await processLocation(item);
     }
-
-    const result = await processLocation(payload);
 
     // OwnTracks iOS HTTP specification strictly requires a JSON array response (e.g. [])
     return res.status(200).json([]);
   } catch (err) {
     console.error('[Route/Location] Error processing location update:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(200).json([]);
   }
 });
 

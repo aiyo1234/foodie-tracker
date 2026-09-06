@@ -7,6 +7,10 @@
  * @returns {number} Distance in meters
  */
 function getDistanceMeters(lat1, lon1, lat2, lon2) {
+  if (!Number.isFinite(lat1) || !Number.isFinite(lon1) || !Number.isFinite(lat2) || !Number.isFinite(lon2)) {
+    return Infinity;
+  }
+
   const R = 6371000; // Earth radius in meters
   const toRad = (deg) => (deg * Math.PI) / 180;
 
@@ -18,7 +22,9 @@ function getDistanceMeters(lat1, lon1, lat2, lon2) {
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  // Clamp 'a' to [0, 1] to prevent Math.sqrt(< 0) resulting in NaN
+  const safeA = Math.min(1, Math.max(0, a));
+  const c = 2 * Math.atan2(Math.sqrt(safeA), Math.sqrt(1 - safeA));
   return R * c;
 }
 
@@ -30,14 +36,14 @@ function getDistanceMeters(lat1, lon1, lat2, lon2) {
  * @returns {{ excluded: boolean, reason?: string }}
  */
 function checkExclusion(lat, lon, config) {
-  if (config.HOME_LAT && config.HOME_LON) {
+  if (Number.isFinite(config.HOME_LAT) && Number.isFinite(config.HOME_LON)) {
     const dist = getDistanceMeters(lat, lon, config.HOME_LAT, config.HOME_LON);
     if (dist <= config.HOME_RADIUS_METERS) {
       return { excluded: true, reason: `Inside Home exclusion zone (${Math.round(dist)}m)` };
     }
   }
 
-  if (config.WORK_LAT && config.WORK_LON) {
+  if (Number.isFinite(config.WORK_LAT) && Number.isFinite(config.WORK_LON)) {
     const dist = getDistanceMeters(lat, lon, config.WORK_LAT, config.WORK_LON);
     if (dist <= config.WORK_RADIUS_METERS) {
       return { excluded: true, reason: `Inside Work exclusion zone (${Math.round(dist)}m)` };

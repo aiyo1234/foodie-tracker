@@ -9,6 +9,34 @@ const { sendTelegramFoodiePrompt } = require('./telegramBot');
 // In-memory cluster tracking
 let currentCluster = null;
 let lastKnownLocation = null;
+let clusterLoadedFromDb = false;
+
+// Load persisted cluster on boot to survive Render free-tier cold starts
+async function loadClusterState() {
+  if (clusterLoadedFromDb) return;
+  clusterLoadedFromDb = true;
+  try {
+    const saved = await db.getSetting('active_cluster');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Only restore if cluster was active within the last 30 minutes
+      if (Date.now() - parsed.lastSeenAt < 30 * 60 * 1000) {
+        currentCluster = parsed;
+        console.log(`[DwellTracker] Restored active cluster from DB: (${parsed.anchorLat.toFixed(4)}, ${parsed.anchorLon.toFixed(4)})`);
+      }
+    }
+  } catch (e) {}
+}
+
+async function persistCluster() {
+  try {
+    if (currentCluster) {
+      await db.setSetting('active_cluster', JSON.stringify(currentCluster));
+    } else {
+      await db.setSetting('active_cluster', '');
+    }
+  } catch (e) {}
+}
 
 /**
  * Process an incoming location update
@@ -17,69 +45,98 @@ let lastKnownLocation = null;
  * @param {number} loc.lon
  * @param {number} [loc.acc]
  * @param {number} [loc.tst]
+ * @param {number} [loc.vel]
  * @returns {Promise<object>} Status report of the location processing
  */
 async function processLocation(loc) {
+  await loadClusterState();
+
   const lat = parseFloat(loc.lat);
   const lon = parseFloat(loc.lon);
-  const acc = loc.acc ? parseFloat(loc.acc) : 0;
-  const timestamp = loc.tst ? (loc.tst > 1e11 ? loc.tst : loc.tst * 1000) : Date.now();
+  const acc = loc.acc != null ? parseFloat(loc.acc) : 0;
+  const vel = loc.vel != null ? parseFloat(loc.vel) : null; // Velocity in km/h
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return { status: 'skipped', reason: 'Invalid coordinates' };
+  }
+
+  // Sanitize timestamp (prevent client clock drift from breaking cooldowns)
+  const nowServer = Date.now();
+  let timestamp = loc.tst ? (loc.tst > 1e11 ? loc.tst : loc.tst * 1000) : nowServer;
+  if (Math.abs(nowServer - timestamp) > 3600 * 1000) {
+    timestamp = nowServer; // Fallback to server time if clock is desynced > 1h
+  }
 
   // Save last known location for manual additions
-  if (lat && lon && (!acc || acc <= 65)) {
+  if (acc <= 65) {
     lastKnownLocation = { lat, lon, acc, timestamp };
     db.setSetting('last_location', JSON.stringify(lastKnownLocation)).catch(() => {});
   }
 
-  // 1. Ignore poor accuracy fixes (avoids jumping to distant stores)
+  // 1. Ignore poor accuracy fixes (above 45m threshold)
   if (acc > 45) {
     console.log(`[DwellTracker] Ignored fix with poor accuracy: ${Math.round(acc)}m (must be <= 45m)`);
     return { status: 'skipped', reason: `Low accuracy (${Math.round(acc)}m)` };
   }
 
-  // 2. Check Home & Work exclusion zones
+  // 2. Velocity guard: If moving at driving speed (> 12 km/h), user is in transit
+  if (vel !== null && vel > 12) {
+    if (currentCluster) {
+      currentCluster = null;
+      await persistCluster();
+    }
+    return { status: 'in_transit', velocity: vel };
+  }
+
+  // 3. Check Home & Work exclusion zones
   const exclusion = checkExclusion(lat, lon, config);
   if (exclusion.excluded) {
-    // Reset any active cluster since user is home or at work
     currentCluster = null;
+    await persistCluster();
     return { status: 'excluded', reason: exclusion.reason };
   }
 
-  const now = timestamp;
-
-  // 3. Evaluate cluster
+  // 4. Initial cluster initialization (Fixed Anchor Point)
   if (!currentCluster) {
     currentCluster = {
+      anchorLat: lat,
+      anchorLon: lon,
       centerLat: lat,
       centerLon: lon,
-      firstSeenAt: now,
-      lastSeenAt: now,
+      firstSeenAt: timestamp,
+      lastSeenAt: timestamp,
       prompted: false,
-      sampleCount: 1
+      sampleCount: 1,
+      outlierCount: 0
     };
+    await persistCluster();
     return { status: 'tracking', durationSeconds: 0, sampleCount: 1 };
   }
 
-  const distFromCenter = getDistanceMeters(lat, lon, currentCluster.centerLat, currentCluster.centerLon);
+  // Measure distance from FIXED ANCHOR (prevents creeping centroid while walking)
+  const distFromAnchor = getDistanceMeters(lat, lon, currentCluster.anchorLat, currentCluster.anchorLon);
 
-  if (distFromCenter <= config.STATIONARY_RADIUS_METERS) {
+  if (distFromAnchor <= config.STATIONARY_RADIUS_METERS) {
     // Still within stationary cluster
-    currentCluster.lastSeenAt = now;
+    currentCluster.outlierCount = 0;
+    currentCluster.lastSeenAt = Math.max(currentCluster.lastSeenAt, timestamp);
     currentCluster.sampleCount += 1;
 
-    // Moving average center to smooth out GPS jitter
-    currentCluster.centerLat = (currentCluster.centerLat * 0.8) + (lat * 0.2);
-    currentCluster.centerLon = (currentCluster.centerLon * 0.8) + (lon * 0.2);
+    // Moving average center to smooth out GPS jitter for pin display
+    currentCluster.centerLat = (currentCluster.centerLat * 0.85) + (lat * 0.15);
+    currentCluster.centerLon = (currentCluster.centerLon * 0.85) + (lon * 0.15);
 
     const dwellSeconds = Math.max(0, Math.round((currentCluster.lastSeenAt - currentCluster.firstSeenAt) / 1000));
+    await persistCluster();
 
     console.log(`[DwellTracker] Stationary at (${currentCluster.centerLat.toFixed(4)}, ${currentCluster.centerLon.toFixed(4)}) for ${dwellSeconds}s (threshold: ${config.DWELL_THRESHOLD_SECONDS}s)`);
 
     // Check if dwell threshold reached and not yet prompted
     if (dwellSeconds >= config.DWELL_THRESHOLD_SECONDS && !currentCluster.prompted) {
       currentCluster.prompted = true; // Mark to prevent duplicate alerts
+      await persistCluster();
 
-      // Check 12-hour cooldown for this spot
+      // Check cooldown for this spot
       const cooldownMs = Date.now() - (config.PROMPT_COOLDOWN_HOURS * 3600 * 1000);
       const recentPrompts = await db.getRecentPrompts(cooldownMs);
       const wasRecentlyPrompted = recentPrompts.some(p => {
@@ -92,7 +149,7 @@ async function processLocation(loc) {
       }
 
       // Identify food stall / restaurant via OpenStreetMap
-      console.log(`[DwellTracker] 5+ minutes reached! Querying OpenStreetMap food places...`);
+      console.log(`[DwellTracker] ${config.DWELL_THRESHOLD_SECONDS}s reached! Querying OpenStreetMap food places...`);
       const place = await findNearbyFoodPlace(lat, lon);
 
       // Create a pending review session
@@ -119,7 +176,7 @@ async function processLocation(loc) {
         lon: lon,
         category: place.category,
         candidates: place.candidates || []
-      });
+      }).catch(err => console.error('[DwellTracker] Telegram error:', err.message));
 
       // Also send ntfy push notification as backup
       await sendFoodieNotification({
@@ -128,7 +185,7 @@ async function processLocation(loc) {
         lat: lat,
         lon: lon,
         category: place.category
-      });
+      }).catch(err => console.error('[DwellTracker] Notifier error:', err.message));
 
       return {
         status: 'triggered',
@@ -140,17 +197,27 @@ async function processLocation(loc) {
 
     return { status: 'dwelling', dwellSeconds, sampleCount: currentCluster.sampleCount };
   } else {
+    // Jitter tolerance: allow 1 outlier sample if accuracy is loose
+    currentCluster.outlierCount = (currentCluster.outlierCount || 0) + 1;
+    if (currentCluster.outlierCount <= 1 && acc > 20) {
+      return { status: 'jitter_ignored', distance: Math.round(distFromAnchor) };
+    }
+
     // User moved away to a new spot
-    console.log(`[DwellTracker] Moved ${Math.round(distFromCenter)}m. Resetting stationary cluster.`);
+    console.log(`[DwellTracker] Moved ${Math.round(distFromAnchor)}m from anchor. Starting new cluster.`);
     currentCluster = {
+      anchorLat: lat,
+      anchorLon: lon,
       centerLat: lat,
       centerLon: lon,
-      firstSeenAt: now,
-      lastSeenAt: now,
+      firstSeenAt: timestamp,
+      lastSeenAt: timestamp,
       prompted: false,
-      sampleCount: 1
+      sampleCount: 1,
+      outlierCount: 0
     };
-    return { status: 'moved', distanceMeters: Math.round(distFromCenter) };
+    await persistCluster();
+    return { status: 'moved', distanceMeters: Math.round(distFromAnchor) };
   }
 }
 
@@ -172,6 +239,7 @@ async function getLastLocation() {
 
 function resetCluster() {
   currentCluster = null;
+  persistCluster();
 }
 
 module.exports = {

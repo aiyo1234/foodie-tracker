@@ -103,10 +103,10 @@ async function runSimulation() {
     category: 'Hawker Stall',
     created_at: Date.now()
   };
-  db.insertReview(sampleReview);
+  await db.insertReview(sampleReview);
 
   // Step 7: Verify review retrieval
-  const allReviews = db.getReviews();
+  const allReviews = await db.getReviews();
   console.log(`\n📊 [Step 7] Total saved reviews in database: ${allReviews.length}`);
   const latest = allReviews[0];
   console.log(`   Latest entry: "${latest.name}" - ${latest.rating} ⭐`);
@@ -115,7 +115,6 @@ async function runSimulation() {
   console.log('\n=====================================================');
   console.log('🎉 ALL SYSTEM SIMULATION TESTS PASSED SUCCESSFULLY!');
   console.log('=====================================================\n');
-  db.close();
 }
 
 runSimulation()

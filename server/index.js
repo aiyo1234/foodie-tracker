@@ -1,7 +1,21 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const config = require('./config');
+
+// Process-level crash guards
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process Guard] Unhandled Rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Process Guard] Uncaught Exception:', err);
+});
+
+// Ensure uploads folder exists
+if (!fs.existsSync(config.UPLOADS_DIR)) {
+  fs.mkdirSync(config.UPLOADS_DIR, { recursive: true });
+}
 
 const locationRoutes = require('./routes/location');
 const reviewRoutes = require('./routes/reviews');
@@ -28,14 +42,12 @@ app.use('/api/location', locationRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api', mapFeedRoutes);
 
-// Telegram Webhook
-app.post('/api/telegram', async (req, res) => {
-  try {
-    await handleTelegramWebhook(req.body);
-  } catch (err) {
-    console.error('[Telegram Webhook Error]:', err);
-  }
+// Telegram Webhook: Acknowledge immediately to avoid Telegram timeout retries
+app.post('/api/telegram', (req, res) => {
   res.sendStatus(200);
+  handleTelegramWebhook(req.body).catch(err => {
+    console.error('[Telegram Webhook Error]:', err);
+  });
 });
 
 // Test food alert trigger for Telegram

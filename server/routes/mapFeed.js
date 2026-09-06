@@ -2,6 +2,24 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
+function escapeCData(str) {
+  if (!str) return '';
+  // Prevent CDATA termination injection and strip XML 1.0 control characters
+  return String(str)
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+    .replace(/]]>/g, ']]]]><![CDATA[>');
+}
+
+function escapeCsv(str) {
+  if (str == null) return '""';
+  let val = String(str).replace(/"/g, '""');
+  // Prevent CSV Formula Injection
+  if (/^[=+@-]$/.test(val[0])) {
+    val = "'" + val;
+  }
+  return `"${val}"`;
+}
+
 /**
  * GET /api/map.kml
  * Direct KML layer export for Google Maps / Google Earth
@@ -12,18 +30,24 @@ router.get('/map.kml', async (req, res) => {
 
     let placemarks = '';
     reviews.forEach(r => {
-      const stars = '⭐'.repeat(r.rating);
+      const rating = Math.max(1, Math.min(5, Number(r.rating) || 5));
+      const stars = '⭐'.repeat(rating);
+      const safeName = escapeCData(r.name);
+      const safeComment = escapeCData(r.comment || 'No notes');
+      const safeAddress = escapeCData(r.address || 'N/A');
+      const date = new Date(r.created_at).toISOString().split('T')[0];
+
       placemarks += `
     <Placemark>
-      <name><![CDATA[${r.name} (${stars})]]></name>
+      <name><![CDATA[${safeName} (${stars})]]></name>
       <description><![CDATA[
-        <p><b>Rating:</b> ${stars} (${r.rating}/5)</p>
-        <p><b>Notes:</b> ${r.comment || 'No notes'}</p>
-        <p><b>Address:</b> ${r.address || 'N/A'}</p>
-        <p><b>Date:</b> ${new Date(r.created_at).toLocaleDateString()}</p>
+        <p><b>Rating:</b> ${stars} (${rating}/5)</p>
+        <p><b>Notes:</b> ${safeComment}</p>
+        <p><b>Address:</b> ${safeAddress}</p>
+        <p><b>Date:</b> ${date}</p>
       ]]></description>
       <Point>
-        <coordinates>${r.lon},${r.lat},0</coordinates>
+        <coordinates>${Number(r.lon)},${Number(r.lat)},0</coordinates>
       </Point>
     </Placemark>`;
     });
@@ -37,7 +61,8 @@ router.get('/map.kml', async (req, res) => {
   </Document>
 </kml>`;
 
-    res.header('Content-Type', 'application/vnd.google-earth.kml+xml');
+    res.setHeader('Content-Type', 'application/vnd.google-earth.kml+xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.attachment('my-foodie-list.kml');
     res.send(kml);
   } catch (err) {
@@ -47,20 +72,21 @@ router.get('/map.kml', async (req, res) => {
 
 /**
  * GET /api/map.csv
- * 1-Click CSV Import for Google My Maps
+ * 1-Click CSV Import for Google My Maps (With UTF-8 BOM for Excel CJK support)
  */
 router.get('/map.csv', async (req, res) => {
   try {
     const reviews = await db.getReviews();
 
-    let csv = 'Name,Rating,Comment,Address,Latitude,Longitude,Date\n';
+    // Prepend UTF-8 BOM (\uFEFF) for Excel compatibility with CJK and emojis
+    let csv = '\uFEFFName,Rating,Comment,Address,Latitude,Longitude,Date\n';
     reviews.forEach(r => {
-      const escape = (str) => `"${(str || '').replace(/"/g, '""')}"`;
-      const date = new Date(r.created_at).toLocaleDateString();
-      csv += `${escape(r.name)},${r.rating},${escape(r.comment)},${escape(r.address)},${r.lat},${r.lon},${date}\n`;
+      const date = new Date(r.created_at).toISOString().split('T')[0];
+      csv += `${escapeCsv(r.name)},${r.rating},${escapeCsv(r.comment)},${escapeCsv(r.address)},${r.lat},${r.lon},${date}\n`;
     });
 
-    res.header('Content-Type', 'text/csv');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.attachment('foodie-list.csv');
     res.send(csv);
   } catch (err) {
@@ -70,30 +96,39 @@ router.get('/map.csv', async (req, res) => {
 
 /**
  * GET /api/map.geojson
- * GeoJSON export
+ * GeoJSON RFC 7946 export with coordinate bounds check
  */
 router.get('/map.geojson', async (req, res) => {
   try {
     const reviews = await db.getReviews();
-    const geojson = {
-      type: 'FeatureCollection',
-      features: reviews.map(r => ({
+    const validFeatures = reviews
+      .filter(r => {
+        const lat = Number(r.lat);
+        const lon = Number(r.lon);
+        return Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+      })
+      .map(r => ({
         type: 'Feature',
+        id: r.id,
         geometry: {
           type: 'Point',
-          coordinates: [r.lon, r.lat]
+          coordinates: [Number(r.lon), Number(r.lat)]
         },
         properties: {
           name: r.name,
-          rating: r.rating,
-          comment: r.comment,
-          address: r.address,
+          rating: Number(r.rating),
+          comment: r.comment || '',
+          address: r.address || '',
           photo_url: r.photo_url,
           date: new Date(r.created_at).toISOString()
         }
-      }))
-    };
-    res.json(geojson);
+      }));
+
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.json({
+      type: 'FeatureCollection',
+      features: validFeatures
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -60,7 +60,22 @@ async function initDb() {
       key TEXT PRIMARY KEY,
       value TEXT
     );`,
+    `CREATE TABLE IF NOT EXISTS bot_sessions (
+      chat_id TEXT PRIMARY KEY,
+      flow TEXT,
+      step TEXT,
+      session_id TEXT,
+      rating INTEGER,
+      store_name TEXT,
+      lat REAL,
+      lon REAL,
+      address TEXT,
+      pending_json TEXT,
+      updated_at INTEGER NOT NULL
+    );`,
     `CREATE INDEX IF NOT EXISTS idx_reviews_rating ON reviews(rating);`,
+    `CREATE INDEX IF NOT EXISTS idx_reviews_created ON reviews(created_at DESC);`,
+    `CREATE INDEX IF NOT EXISTS idx_pending_status_created ON pending_reviews(status, created_at DESC);`,
     `CREATE INDEX IF NOT EXISTS idx_prompted_time ON prompted_places(prompted_at);`
   ]);
 }
@@ -97,6 +112,13 @@ module.exports = {
       ]
     });
   },
+  deleteLatestReview: async () => {
+    const rs = await client.execute('SELECT id, name FROM reviews ORDER BY created_at DESC LIMIT 1');
+    if (rs.rows.length === 0) return null;
+    const item = rs.rows[0];
+    await client.execute({ sql: 'DELETE FROM reviews WHERE id = ?', args: [item.id] });
+    return item;
+  },
   getPendingReviews: async () => {
     const rs = await client.execute("SELECT * FROM pending_reviews WHERE status = 'pending' ORDER BY created_at DESC");
     return rs.rows;
@@ -125,9 +147,14 @@ module.exports = {
     return await client.execute({ sql: 'UPDATE pending_reviews SET status = ? WHERE id = ?', args: [status, id] });
   },
   recordPrompt: async (lat, lon, name) => {
+    const now = Date.now();
+    // Auto-prune prompts older than 30 days to avoid table bloat
+    const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
+    client.execute({ sql: 'DELETE FROM prompted_places WHERE prompted_at < ?', args: [thirtyDaysAgo] }).catch(() => {});
+
     return await client.execute({
       sql: 'INSERT INTO prompted_places (lat, lon, name, prompted_at) VALUES (?, ?, ?, ?)',
-      args: [lat, lon, name || 'Eatery', Date.now()]
+      args: [lat, lon, name || 'Eatery', now]
     });
   },
   getRecentPrompts: async (sinceMs) => {
@@ -142,6 +169,57 @@ module.exports = {
     return await client.execute({
       sql: 'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
       args: [key, String(value)]
+    });
+  },
+  getBotSession: async (chatId) => {
+    const rs = await client.execute({
+      sql: 'SELECT * FROM bot_sessions WHERE chat_id = ?',
+      args: [String(chatId)]
+    });
+    if (!rs.rows[0]) return null;
+    const row = rs.rows[0];
+    let pending = null;
+    if (row.pending_json) {
+      try { pending = JSON.parse(row.pending_json); } catch (e) {}
+    }
+    return {
+      flow: row.flow,
+      step: row.step,
+      sessionId: row.session_id,
+      rating: row.rating !== null ? Number(row.rating) : undefined,
+      storeName: row.store_name,
+      name: row.store_name,
+      lat: row.lat !== null ? Number(row.lat) : undefined,
+      lon: row.lon !== null ? Number(row.lon) : undefined,
+      address: row.address,
+      pending,
+      updatedAt: Number(row.updated_at)
+    };
+  },
+  setBotSession: async (chatId, s) => {
+    return await client.execute({
+      sql: `INSERT OR REPLACE INTO bot_sessions 
+            (chat_id, flow, step, session_id, rating, store_name, lat, lon, address, pending_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        String(chatId),
+        s.flow || null,
+        s.step || null,
+        s.sessionId || null,
+        s.rating !== undefined ? Number(s.rating) : null,
+        s.storeName || s.name || null,
+        s.lat !== undefined ? Number(s.lat) : null,
+        s.lon !== undefined ? Number(s.lon) : null,
+        s.address || null,
+        s.pending ? JSON.stringify(s.pending) : null,
+        Date.now()
+      ]
+    });
+  },
+  deleteBotSession: async (chatId) => {
+    return await client.execute({
+      sql: 'DELETE FROM bot_sessions WHERE chat_id = ?',
+      args: [String(chatId)]
     });
   }
 };

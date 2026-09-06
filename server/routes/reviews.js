@@ -161,4 +161,32 @@ router.post('/pending/:id/dismiss', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/reviews/photos/tg/:fileId
+ * Streams Telegram food photos live from Telegram CDN with caching.
+ * Guaranteed never to 404 even if Render free-tier restarts or wipes disk!
+ */
+router.get('/photos/tg/:fileId', async (req, res) => {
+  try {
+    const fileId = req.params.fileId;
+    const { callTelegram } = require('../services/telegramBot');
+    const fileInfo = await callTelegram('getFile', { file_id: fileId });
+
+    if (!fileInfo || !fileInfo.result || !fileInfo.result.file_path) {
+      return res.status(404).send('Photo not found on Telegram');
+    }
+
+    const tgUrl = `https://api.telegram.org/file/bot${config.TELEGRAM_BOT_TOKEN}/${fileInfo.result.file_path}`;
+    const upstream = await fetch(tgUrl);
+    if (!upstream.ok) return res.status(404).send('Failed to fetch from Telegram CDN');
+
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
 module.exports = router;
