@@ -44,11 +44,16 @@ app.get('/api/test-alert', async (req, res) => {
     const db = require('./db');
     const { sendTelegramFoodiePrompt } = require('./services/telegramBot');
     const sessionId = 'sess_' + Date.now();
+    const candidates = [
+      { name: 'Sibu Night Market - Ding Bian Hu', distance: 8 },
+      { name: 'Ah Huat Kampua Mee & Kompia', distance: 18 },
+      { name: 'Central Market Sugar Cane & Fruit Juice', distance: 32 }
+    ];
     
-    db.insertPending({
+    await db.insertPending({
       id: sessionId,
-      name: 'Sibu Night Market - Ding Bian Hu',
-      candidates: [],
+      name: candidates[0].name,
+      candidates: candidates,
       lat: 2.30206,
       lon: 111.86868,
       address: 'Market Road, Sibu',
@@ -57,14 +62,15 @@ app.get('/api/test-alert', async (req, res) => {
     });
 
     const success = await sendTelegramFoodiePrompt({
-      placeName: 'Sibu Night Market - Ding Bian Hu',
+      placeName: candidates[0].name,
       sessionId: sessionId,
       lat: 2.30206,
       lon: 111.86868,
-      category: 'Food Stall'
+      category: 'Food Stall',
+      candidates: candidates
     });
 
-    res.json({ success, message: 'Test alert sent to Telegram!', sessionId });
+    res.json({ success, message: 'Test alert sent with multiple stall options!', sessionId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

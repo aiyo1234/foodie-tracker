@@ -9,7 +9,7 @@ const { getDistanceMeters } = require('./geoUtils');
  * @param {number} radiusMeters 
  * @returns {Promise<{ name: string, category: string, address: string, candidates: Array<{ name: string, category: string, distance: number }> }>}
  */
-async function findNearbyFoodPlace(lat, lon, radiusMeters = 65) {
+async function findNearbyFoodPlace(lat, lon, radiusMeters = 45) {
   const overpassQuery = `
     [out:json][timeout:6];
     (
@@ -18,7 +18,7 @@ async function findNearbyFoodPlace(lat, lon, radiusMeters = 65) {
       node["shop"~"bakery|deli|confectionery"](around:${radiusMeters},${lat},${lon});
       way["shop"~"bakery|deli|confectionery"](around:${radiusMeters},${lat},${lon});
     );
-    out center 5;
+    out center 6;
   `.trim();
 
   try {
@@ -40,32 +40,46 @@ async function findNearbyFoodPlace(lat, lon, radiusMeters = 65) {
     if (response.ok) {
       const data = await response.json();
       if (data.elements && data.elements.length > 0) {
-        const candidates = data.elements
+        const rawCandidates = data.elements
           .map(el => {
             const pLat = el.lat || (el.center && el.center.lat);
             const pLon = el.lon || (el.center && el.center.lon);
             const tags = el.tags || {};
             const dist = pLat && pLon ? Math.round(getDistanceMeters(lat, lon, pLat, pLon)) : 0;
-            const name = tags.name || tags['name:en'] || tags.brand || 'Unnamed Eatery';
+            const name = tags.name || tags['name:en'] || tags.brand || '';
             const category = tags.amenity || tags.shop || 'restaurant';
             const cuisine = tags.cuisine ? ` (${tags.cuisine})` : '';
 
             return {
-              name: `${name}${cuisine}`,
+              name: name ? `${name}${cuisine}` : '',
               category: formatCategory(category),
               address: tags['addr:street'] ? `${tags['addr:housenumber'] || ''} ${tags['addr:street']}`.trim() : '',
               distance: dist
             };
           })
+          .filter(c => c.name.length > 0)
           .sort((a, b) => a.distance - b.distance);
 
-        const primary = candidates[0];
-        return {
-          name: primary.name,
-          category: primary.category,
-          address: primary.address || `Near ${lat.toFixed(4)}, ${lon.toFixed(4)}`,
-          candidates: candidates.slice(0, 4)
-        };
+        // Deduplicate candidates by name
+        const seenNames = new Set();
+        const candidates = [];
+        for (const c of rawCandidates) {
+          const cleanName = c.name.toLowerCase().trim();
+          if (!seenNames.has(cleanName)) {
+            seenNames.add(cleanName);
+            candidates.push(c);
+          }
+        }
+
+        if (candidates.length > 0) {
+          const primary = candidates[0];
+          return {
+            name: primary.name,
+            category: primary.category,
+            address: primary.address || `Near ${lat.toFixed(4)}, ${lon.toFixed(4)}`,
+            candidates: candidates.slice(0, 4)
+          };
+        }
       }
     }
   } catch (err) {

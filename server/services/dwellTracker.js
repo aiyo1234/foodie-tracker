@@ -24,8 +24,9 @@ async function processLocation(loc) {
   const acc = loc.acc ? parseFloat(loc.acc) : 0;
   const timestamp = loc.tst ? (loc.tst > 1e11 ? loc.tst : loc.tst * 1000) : Date.now();
 
-  // 1. Ignore very poor accuracy fixes
-  if (acc > 120) {
+  // 1. Ignore poor accuracy fixes (avoids jumping to distant stores)
+  if (acc > 45) {
+    console.log(`[DwellTracker] Ignored fix with poor accuracy: ${Math.round(acc)}m (must be <= 45m)`);
     return { status: 'skipped', reason: `Low accuracy (${Math.round(acc)}m)` };
   }
 
@@ -103,13 +104,14 @@ async function processLocation(loc) {
       // Record prompt in cooldown table
       await db.recordPrompt(lat, lon, place.name);
 
-      // Send via Telegram Bot (instant 1-tap rating buttons)
+      // Send via Telegram Bot (instant 1-tap rating buttons or candidate selection)
       await sendTelegramFoodiePrompt({
         placeName: place.name,
         sessionId: sessionId,
         lat: lat,
         lon: lon,
-        category: place.category
+        category: place.category,
+        candidates: place.candidates || []
       });
 
       // Also send ntfy push notification as backup

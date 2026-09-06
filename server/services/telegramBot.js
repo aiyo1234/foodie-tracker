@@ -29,8 +29,9 @@ async function callTelegram(method, payload) {
 
 /**
  * Sends the interactive 1-tap rating message directly inside Telegram
+ * Offers nearby candidate stalls if multiple are detected
  */
-async function sendTelegramFoodiePrompt({ placeName, sessionId, lat, lon, category }) {
+async function sendTelegramFoodiePrompt({ placeName, sessionId, lat, lon, category, candidates = [] }) {
   if (!storedChatId) {
     storedChatId = await db.getSetting('telegram_chat_id');
   }
@@ -40,20 +41,45 @@ async function sendTelegramFoodiePrompt({ placeName, sessionId, lat, lon, catego
     return false;
   }
 
-  const message = `🍽️ *Foodie Alert: Are you at ${escapeMarkdown(placeName)}?*\n\nYou've been at this ${category.toLowerCase()} for a few minutes. Tap a rating below:`;
+  let message = '';
+  const inlineKeyboard = [];
 
-  const inlineKeyboard = [
-    [
+  if (candidates && candidates.length > 1) {
+    // Multi-candidate mode: User can pick from nearby detected stalls or type their own!
+    message = `🍽️ *Foodie Alert: Which food stall are you at?*\n\nWe detected a few eateries around your location. Tap your stall:`;
+
+    candidates.slice(0, 4).forEach((c, idx) => {
+      const icons = ['🍜', '🍛', '☕', '🍱'];
+      const icon = icons[idx] || '🍴';
+      inlineKeyboard.push([
+        { text: `${icon} ${c.name} (~${c.distance}m)`, callback_data: `pick_candidate:${idx}:${sessionId}` }
+      ]);
+    });
+
+    inlineKeyboard.push([
+      { text: '✏️ Different Stall / Type Name', callback_data: `rename_store:${sessionId}` }
+    ]);
+    inlineKeyboard.push([
+      { text: '❌ Not an eatery / Ignore', callback_data: `dismiss:${sessionId}` }
+    ]);
+  } else {
+    // Single place detected: Show rating stars + option to correct name if wrong!
+    message = `🍽️ *Foodie Alert: Are you at ${escapeMarkdown(placeName)}?*\n\nTap a rating below (or change the name if incorrect):`;
+
+    inlineKeyboard.push([
       { text: '⭐ 1', callback_data: `rate:1:${sessionId}` },
       { text: '⭐ 2', callback_data: `rate:2:${sessionId}` },
       { text: '⭐ 3', callback_data: `rate:3:${sessionId}` },
       { text: '⭐ 4', callback_data: `rate:4:${sessionId}` },
       { text: '⭐ 5', callback_data: `rate:5:${sessionId}` }
-    ],
-    [
+    ]);
+    inlineKeyboard.push([
+      { text: '✏️ Wrong Store / Change Name', callback_data: `rename_store:${sessionId}` }
+    ]);
+    inlineKeyboard.push([
       { text: '❌ Not an eatery / Ignore', callback_data: `dismiss:${sessionId}` }
-    ]
-  ];
+    ]);
+  }
 
   const res = await callTelegram('sendMessage', {
     chat_id: storedChatId,
@@ -69,7 +95,7 @@ async function sendTelegramFoodiePrompt({ placeName, sessionId, lat, lon, catego
  * Handles incoming webhooks from Telegram
  */
 async function handleTelegramWebhook(body) {
-  // 1. Handle Callback Query (User tapped a Star Rating button)
+  // 1. Handle Callback Query (User tapped a button)
   if (body.callback_query) {
     const query = body.callback_query;
     const data = query.data || '';
@@ -77,6 +103,95 @@ async function handleTelegramWebhook(body) {
     storedChatId = chatId;
 
     await callTelegram('answerCallbackQuery', { callback_query_id: query.id });
+
+    // User picked one of the nearby candidates
+    if (data.startsWith('pick_candidate:')) {
+      const parts = data.split(':');
+      const idx = parseInt(parts[1], 10);
+      const sessionId = parts[2];
+
+      const pending = await db.getPendingById(sessionId);
+      let storeName = 'Selected Food Stall';
+      if (pending && pending.candidates_json) {
+        try {
+          const cands = JSON.parse(pending.candidates_json);
+          if (cands[idx]) storeName = cands[idx].name;
+        } catch (e) {}
+      }
+
+      activeSessions.set(chatId, {
+        step: 'awaiting_rating',
+        sessionId,
+        storeName,
+        pending
+      });
+
+      const inlineKeyboard = [
+        [
+          { text: '⭐ 1', callback_data: `named_rate:1:${sessionId}` },
+          { text: '⭐ 2', callback_data: `named_rate:2:${sessionId}` },
+          { text: '⭐ 3', callback_data: `named_rate:3:${sessionId}` },
+          { text: '⭐ 4', callback_data: `named_rate:4:${sessionId}` },
+          { text: '⭐ 5', callback_data: `named_rate:5:${sessionId}` }
+        ],
+        [
+          { text: '✏️ Different Name', callback_data: `rename_store:${sessionId}` }
+        ]
+      ];
+
+      await callTelegram('sendMessage', {
+        chat_id: chatId,
+        text: `You selected *${escapeMarkdown(storeName)}*! Tap your rating:`,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: inlineKeyboard }
+      });
+      return;
+    }
+
+    // User requested to change / type a custom store name
+    if (data.startsWith('rename_store:')) {
+      const sessionId = data.split(':')[1];
+      const pending = await db.getPendingById(sessionId);
+
+      activeSessions.set(chatId, {
+        flow: 'rename_store',
+        sessionId,
+        pending
+      });
+
+      await callTelegram('sendMessage', {
+        chat_id: chatId,
+        text: `✏️ *What is the correct name of the food stall you're at?*\n\nType the name below and send:`,
+        parse_mode: 'Markdown'
+      });
+      return;
+    }
+
+    // User rated after selecting a candidate or typing name
+    if (data.startsWith('named_rate:')) {
+      const parts = data.split(':');
+      const rating = parseInt(parts[1], 10);
+      const sessionId = parts[2];
+
+      const session = activeSessions.get(chatId) || {};
+      const storeName = session.storeName || (session.pending ? session.pending.name : 'Food Stall');
+
+      activeSessions.set(chatId, {
+        step: 'awaiting_comment',
+        rating,
+        sessionId,
+        storeName,
+        pending: session.pending
+      });
+
+      const stars = '⭐'.repeat(rating);
+      await callTelegram('sendMessage', {
+        chat_id: chatId,
+        text: `You rated *${escapeMarkdown(storeName)}* ${stars}!\n\n💬 *Type your review or food notes below* (or send a food photo!):`,
+        parse_mode: 'Markdown'
+      });
+      return;
+    }
 
     if (data.startsWith('rate:')) {
       const parts = data.split(':');
@@ -90,6 +205,7 @@ async function handleTelegramWebhook(body) {
         step: 'awaiting_comment',
         rating,
         sessionId,
+        storeName,
         pending
       });
 
@@ -255,6 +371,33 @@ async function handleTelegramWebhook(body) {
       }
     }
 
+    // Check if user is typing the correct name for a detected stall
+    const renameSession = activeSessions.get(chatId);
+    if (renameSession && renameSession.flow === 'rename_store') {
+      const storeName = text;
+      renameSession.storeName = storeName;
+      renameSession.flow = null;
+      renameSession.step = 'awaiting_rating';
+
+      const inlineKeyboard = [
+        [
+          { text: '⭐ 1', callback_data: `named_rate:1:${renameSession.sessionId}` },
+          { text: '⭐ 2', callback_data: `named_rate:2:${renameSession.sessionId}` },
+          { text: '⭐ 3', callback_data: `named_rate:3:${renameSession.sessionId}` },
+          { text: '⭐ 4', callback_data: `named_rate:4:${renameSession.sessionId}` },
+          { text: '⭐ 5', callback_data: `named_rate:5:${renameSession.sessionId}` }
+        ]
+      ];
+
+      await callTelegram('sendMessage', {
+        chat_id: chatId,
+        text: `Got it! Rate *${escapeMarkdown(storeName)}*:`,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: inlineKeyboard }
+      });
+      return;
+    }
+
     // Command: /list (View recent reviews)
     if (text === '/list' || text === '📋 View My List') {
       const rawReviews = await db.getReviews();
@@ -297,7 +440,7 @@ async function handleTelegramWebhook(body) {
 
       const review = {
         id: reviewId,
-        name: active.name || (pending ? pending.name : 'Local Food Spot'),
+        name: active.storeName || active.name || (pending ? pending.name : 'Local Food Spot'),
         lat: active.lat !== undefined ? active.lat : (pending ? pending.lat : 0),
         lon: active.lon !== undefined ? active.lon : (pending ? pending.lon : 0),
         address: active.address || (pending ? pending.address : ''),
