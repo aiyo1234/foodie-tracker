@@ -335,20 +335,18 @@ async function handleTelegramWebhook(body) {
     if (text === '➕ Add Food Stall Manually' || text === '/add') {
       activeSessions.set(chatId, {
         flow: 'manual_add',
-        step: 'awaiting_location'
+        step: 'awaiting_name'
       });
 
       await callTelegram('sendMessage', {
         chat_id: chatId,
-        text: `📍 *Let's add an unmapped food stall!*\n\nTap the button below to send your current location, or type the area/street name:`,
+        text: `🍜 *Adding a food stall!*\n\nWhat is the name of the food stall you're at?\n*(Type the name below and send):*`,
         parse_mode: 'Markdown',
         reply_markup: {
           keyboard: [
-            [{ text: '📍 Share Current GPS Location', request_location: true }],
             [{ text: '❌ Cancel' }]
           ],
-          resize_keyboard: true,
-          one_time_keyboard: true
+          resize_keyboard: true
         }
       });
       return;
@@ -368,65 +366,43 @@ async function handleTelegramWebhook(body) {
       return;
     }
 
-    // Check if in manual add flow
+    // Check if in manual add flow: Received Store Name directly!
     const manualSession = activeSessions.get(chatId);
-    if (manualSession && manualSession.flow === 'manual_add') {
-      // Step A: Received Location
-      if (manualSession.step === 'awaiting_location') {
-        let lat = 0, lon = 0, address = '';
-        if (msg.location) {
-          lat = msg.location.latitude;
-          lon = msg.location.longitude;
-          address = `GPS (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
-        } else {
-          // User typed text address/street
-          address = text;
-          // Fallback to recent cluster coordinates if available
-          const lastCluster = require('./dwellTracker').getClusterState();
-          lat = lastCluster ? lastCluster.centerLat : 2.30206;
-          lon = lastCluster ? lastCluster.centerLon : 111.86868;
-        }
+    if (manualSession && manualSession.flow === 'manual_add' && manualSession.step === 'awaiting_name') {
+      const storeName = text;
+      
+      // Automatically grab the phone's live GPS coordinates from OwnTracks
+      const dwellTracker = require('./dwellTracker');
+      const lastCluster = dwellTracker.getClusterState();
+      const lastLoc = await dwellTracker.getLastLocation();
+      const lat = (lastCluster && lastCluster.centerLat) || (lastLoc && lastLoc.lat) || 2.30206;
+      const lon = (lastCluster && lastCluster.centerLon) || (lastLoc && lastLoc.lon) || 111.86868;
 
-        manualSession.step = 'awaiting_name';
-        manualSession.lat = lat;
-        manualSession.lon = lon;
-        manualSession.address = address;
+      manualSession.name = storeName;
+      manualSession.lat = lat;
+      manualSession.lon = lon;
+      manualSession.address = `GPS (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+      manualSession.step = 'awaiting_rating';
+      const tempId = 'manual_' + Date.now();
+      manualSession.sessionId = tempId;
 
-        await callTelegram('sendMessage', {
-          chat_id: chatId,
-          text: `🍜 *Got location!* Now, what is the name of this food stall?`,
-          parse_mode: 'Markdown',
-          reply_markup: { remove_keyboard: true }
-        });
-        return;
-      }
+      const inlineKeyboard = [
+        [
+          { text: '⭐ 1', callback_data: `manual_rate:1:${tempId}` },
+          { text: '⭐ 2', callback_data: `manual_rate:2:${tempId}` },
+          { text: '⭐ 3', callback_data: `manual_rate:3:${tempId}` },
+          { text: '⭐ 4', callback_data: `manual_rate:4:${tempId}` },
+          { text: '⭐ 5', callback_data: `manual_rate:5:${tempId}` }
+        ]
+      ];
 
-      // Step B: Received Store Name
-      if (manualSession.step === 'awaiting_name') {
-        const storeName = text;
-        manualSession.name = storeName;
-        manualSession.step = 'awaiting_rating';
-        const tempId = 'manual_' + Date.now();
-        manualSession.sessionId = tempId;
-
-        const inlineKeyboard = [
-          [
-            { text: '⭐ 1', callback_data: `manual_rate:1:${tempId}` },
-            { text: '⭐ 2', callback_data: `manual_rate:2:${tempId}` },
-            { text: '⭐ 3', callback_data: `manual_rate:3:${tempId}` },
-            { text: '⭐ 4', callback_data: `manual_rate:4:${tempId}` },
-            { text: '⭐ 5', callback_data: `manual_rate:5:${tempId}` }
-          ]
-        ];
-
-        await callTelegram('sendMessage', {
-          chat_id: chatId,
-          text: `Rate *${escapeMarkdown(storeName)}*:`,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: inlineKeyboard }
-        });
-        return;
-      }
+      await callTelegram('sendMessage', {
+        chat_id: chatId,
+        text: `Rate *${escapeMarkdown(storeName)}*:`,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: inlineKeyboard }
+      });
+      return;
     }
 
     // Check if user is typing the correct name for a detected stall

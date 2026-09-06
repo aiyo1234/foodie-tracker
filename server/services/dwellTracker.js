@@ -8,6 +8,7 @@ const { sendTelegramFoodiePrompt } = require('./telegramBot');
 
 // In-memory cluster tracking
 let currentCluster = null;
+let lastKnownLocation = null;
 
 /**
  * Process an incoming location update
@@ -23,6 +24,12 @@ async function processLocation(loc) {
   const lon = parseFloat(loc.lon);
   const acc = loc.acc ? parseFloat(loc.acc) : 0;
   const timestamp = loc.tst ? (loc.tst > 1e11 ? loc.tst : loc.tst * 1000) : Date.now();
+
+  // Save last known location for manual additions
+  if (lat && lon && (!acc || acc <= 65)) {
+    lastKnownLocation = { lat, lon, acc, timestamp };
+    db.setSetting('last_location', JSON.stringify(lastKnownLocation)).catch(() => {});
+  }
 
   // 1. Ignore poor accuracy fixes (avoids jumping to distant stores)
   if (acc > 45) {
@@ -151,6 +158,18 @@ function getClusterState() {
   return currentCluster;
 }
 
+async function getLastLocation() {
+  if (lastKnownLocation) return lastKnownLocation;
+  try {
+    const raw = await db.getSetting('last_location');
+    if (raw) {
+      lastKnownLocation = JSON.parse(raw);
+      return lastKnownLocation;
+    }
+  } catch (e) {}
+  return null;
+}
+
 function resetCluster() {
   currentCluster = null;
 }
@@ -158,5 +177,6 @@ function resetCluster() {
 module.exports = {
   processLocation,
   getClusterState,
+  getLastLocation,
   resetCluster
 };
