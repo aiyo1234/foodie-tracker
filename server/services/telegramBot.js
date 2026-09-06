@@ -257,6 +257,64 @@ async function handleTelegramWebhook(body) {
     await db.setSetting('telegram_chat_id', chatId);
     const text = (msg.text || '').trim();
 
+    // Universal GPS Location Handler: Catches any shared location (via button or paperclip)
+    if (msg.location) {
+      const lat = msg.location.latitude;
+      const lon = msg.location.longitude;
+      const { findNearbyFoodPlace } = require('./osmService');
+      const place = await findNearbyFoodPlace(lat, lon);
+
+      const sessionId = 'manual_' + Date.now();
+      await db.insertPending({
+        id: sessionId,
+        name: place.name || 'Local Food Spot',
+        candidates: place.candidates || [],
+        lat: lat,
+        lon: lon,
+        address: place.address || `GPS (${lat.toFixed(4)}, ${lon.toFixed(4)})`,
+        category: place.category || 'Food Stall',
+        created_at: Date.now()
+      });
+
+      activeSessions.set(chatId, {
+        sessionId,
+        lat,
+        lon,
+        address: place.address,
+        candidates: place.candidates
+      });
+
+      const inlineKeyboard = [];
+      if (place.candidates && place.candidates.length > 0) {
+        place.candidates.slice(0, 4).forEach((c, idx) => {
+          const icons = ['🍜', '🍛', '☕', '🍱'];
+          const icon = icons[idx] || '🍴';
+          inlineKeyboard.push([
+            { text: `${icon} ${c.name} (~${c.distance}m)`, callback_data: `pick_candidate:${idx}:${sessionId}` }
+          ]);
+        });
+      }
+
+      inlineKeyboard.push([
+        { text: '✏️ Type Food Stall Name', callback_data: `rename_store:${sessionId}` }
+      ]);
+      inlineKeyboard.push([
+        { text: '❌ Cancel', callback_data: `dismiss:${sessionId}` }
+      ]);
+
+      const promptText = place.candidates && place.candidates.length > 0
+        ? `📍 *GPS Location received!* Which food stall are you at?`
+        : `📍 *GPS Location received!* Tap below to type the food stall name:`;
+
+      await callTelegram('sendMessage', {
+        chat_id: chatId,
+        text: promptText,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: inlineKeyboard }
+      });
+      return;
+    }
+
     // Command: /start or Persistent Menu
     if (text === '/start') {
       await callTelegram('sendMessage', {
